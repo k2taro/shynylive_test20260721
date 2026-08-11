@@ -1,6 +1,6 @@
 library(shiny)
 library(jsonlite)
-library(plotly)
+library(echarts4r)
 
 # h-index 計算関数
 calc_h_index <- function(citations) {
@@ -10,22 +10,27 @@ calc_h_index <- function(citations) {
   return(ifelse(is.infinite(h), 0, h))
 }
 
-# ヌル合体演算子の代替 (base R)
+# ヌル合体演算子 (base R)
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
 ui <- fluidPage(
   tags$head(
     tags$style(HTML("
+      /* データ計算中の要素を半透明にし、メッセージを表示 */
       .shiny-output-waiting-base { opacity: 0.3 !important; }
-      /* テーブルの見た目を整えるスタイル */
+      .loading-notice { background-color: #e8f4f8; border-left: 4px solid #2b5c8f; padding: 10px 15px; margin-bottom: 15px; border-radius: 4px; font-size: 0.9em; color: #2b5c8f; }
+      /* テーブルのカスタムCSS (DTの代替) */
       .custom-table table { width: 100%; border-collapse: collapse; }
       .custom-table th { background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 8px; font-size: 0.9em; }
       .custom-table td { padding: 8px; border-bottom: 1px solid #dee2e6; font-size: 0.85em; }
-      .custom-table td:nth-child(2) { text-align: center; } /* 論文数カラムを中央寄せ */
+      .custom-table td:nth-child(2) { text-align: center; }
+      /* ネットワーク用ラジオボタン一覧の高さ固定・スクロール設定 */
+      .network-paper-list { max-height: 440px; overflow-y: auto; padding: 10px; border: 1px solid #dee2e6; border-radius: 4px; background-color: #fff; }
+      .network-paper-list .radio { margin-top: 5px; margin-bottom: 8px; font-size: 0.85em; }
     "))
   ),
 
-  titlePanel("OpenAlex Author Dashboard (Shinylive Ready)"),
+  titlePanel("OpenAlex Author Dashboard (echarts4r / Shinylive Ready)"),
   
   sidebarLayout(
     sidebarPanel(
@@ -46,15 +51,27 @@ ui <- fluidPage(
         column(4, wellPanel(style = "text-align: center; padding: 10px;", h4("h-index"), h2(textOutput("h_index"))))
       ),
       hr(),
+      # 上段: 年推移 (幅8) & 共著者Top10 (幅4)
       fluidRow(
-        column(8, plotlyOutput("time_series_plot", height = "450px")),
+        column(8, echarts4rOutput("time_series_plot", height = "450px")),
         column(4, div(class = "custom-table", tableOutput("coauthor_table")))
       ),
       br(),
+      # 中段: キーワード (幅4) & トピック (幅4) & ジャーナルTop10 (幅4)
       fluidRow(
-        column(4, plotlyOutput("wordcloud_plot", height = "450px")),
-        column(4, plotlyOutput("topic_pie_plot", height = "450px")),
+        column(4, echarts4rOutput("wordcloud_plot", height = "450px")),
+        column(4, echarts4rOutput("topic_pie_plot", height = "450px")),
         column(4, div(class = "custom-table", tableOutput("journal_table")))
+      ),
+      br(),
+      # 下段（3段目）: 左側2/3(幅8)にネットワーク、右側1/3(幅4)に論文一覧
+      fluidRow(
+        column(8, echarts4rOutput("paper_network_plot", height = "500px")),
+        column(4, 
+          h4("ネットワーク論文一覧", style = "margin-top: 0;"),
+          helpText("選択した論文がネットワーク上で強調（オレンジ色）されます。"),
+          div(class = "network-paper-list", uiOutput("network_paper_selector"))
+        )
       )
     )
   )
@@ -67,16 +84,11 @@ server <- function(input, output, session) {
     req(input$author_id)
     clean_id <- trimws(input$author_id)
     
-    url <- sprintf(
-      "https://api.openalex.org/works?filter=author.id:%s&per-page=200&mailto=example@example.com", 
-      clean_id
-    )
+    url <- sprintf("https://api.openalex.org/works?filter=author.id:%s&per-page=200&mailto=example@example.com", clean_id)
     
     res <- tryCatch({
       jsonlite::fromJSON(url, simplifyVector = FALSE)
-    }, error = function(e) {
-      return(NULL)
-    })
+    }, error = function(e) return(NULL))
     
     if (is.null(res) || length(res$results) == 0) return(NULL)
     res$results
@@ -91,12 +103,10 @@ server <- function(input, output, session) {
     min_yr <- min(years, na.rm = TRUE)
     max_yr <- max(years, na.rm = TRUE)
     
-    sliderInput("year_range", "対象年の絞り込み:",
-                min = min_yr, max = max_yr,
-                value = c(min_yr, max_yr), step = 1, sep = "")
+    sliderInput("year_range", "対象年の絞り込み:", min = min_yr, max = max_yr, value = c(min_yr, max_yr), step = 1, sep = "")
   })
   
-  # フィルタリング済みデータの reactive オブジェクト
+  # フィルタリング済みデータ
   filtered_works <- reactive({
     works <- raw_data()
     if (is.null(works)) return(list())
@@ -111,23 +121,12 @@ server <- function(input, output, session) {
   })
   
   # 1. 指標の計算と表示
-  output$total_papers <- renderText({
-    length(filtered_works())
-  })
+  output$total_papers <- renderText({ length(filtered_works()) })
+  output$total_citations <- renderText({ sum(sapply(filtered_works(), function(w) w$cited_by_count %||% 0)) })
+  output$h_index <- renderText({ calc_h_index(sapply(filtered_works(), function(w) w$cited_by_count %||% 0)) })
   
-  output$total_citations <- renderText({
-    works <- filtered_works()
-    sum(sapply(works, function(w) w$cited_by_count %||% 0))
-  })
-  
-  output$h_index <- renderText({
-    works <- filtered_works()
-    cites <- sapply(works, function(w) w$cited_by_count %||% 0)
-    calc_h_index(cites)
-  })
-  
-  # 年推移グラフ (論文数 & 被引用数)
-  output$time_series_plot <- renderPlotly({
+  # 年推移グラフ (echarts4r / base R)
+  output$time_series_plot <- renderEcharts4r({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
     
@@ -137,11 +136,8 @@ server <- function(input, output, session) {
     valid <- !is.na(years)
     if (!any(valid)) return(NULL)
     
-    years <- years[valid]
-    cites <- cites[valid]
-    
-    tbl_papers <- table(years)
-    tbl_cites <- tapply(cites, years, sum)
+    tbl_papers <- table(years[valid])
+    tbl_cites <- tapply(cites[valid], years[valid], sum)
     
     df <- data.frame(
       year = as.numeric(names(tbl_papers)),
@@ -150,21 +146,29 @@ server <- function(input, output, session) {
     )
     df <- df[order(df$year), ]
     
-    plot_ly(df, x = ~year) %>%
-      add_trace(y = ~papers, name = "論文数", type = "bar", marker = list(color = "#4c78a8")) %>%
-      add_trace(y = ~citations, name = "被引用数", type = "scatter", mode = "lines+markers", 
-                yaxis = "y2", line = list(color = "#e15759")) %>%
-      layout(
-        title = "年別 論文数と被引用数の推移",
-        xaxis = list(title = "年", dtick = 1),
-        yaxis = list(title = "論文数", side = "left"),
-        yaxis2 = list(title = "被引用数", overlaying = "y", side = "right"),
-        legend = list(x = 0.05, y = 0.95)
-      )
+    min_year <- min(df$year)
+    max_year <- max(df$year)
+    
+    p <- e_charts(df, year)
+    p <- e_bar(p, papers, name = "論文数", y_index = 0, itemStyle = list(color = "#4c78a8"))
+    p <- e_line(p, citations, name = "被引用数", y_index = 1, itemStyle = list(color = "#e15759"))
+    p <- e_y_axis(p, name = "論文数", index = 0)
+    p <- e_y_axis(p, name = "被引用数", index = 1)
+    
+    p <- e_x_axis(p, 
+                  min = min_year, 
+                  max = max_year, 
+                  interval = 1, 
+                  axisLabel = list(formatter = "{value}"))
+                  
+    p <- e_tooltip(p, trigger = "axis")
+    p <- e_title(p, "年別 論文数と被引用数の推移")
+    p <- e_legend(p, right = 10)
+    p
   })
   
   # 2. トピック（円グラフ）
-  output$topic_pie_plot <- renderPlotly({
+  output$topic_pie_plot <- renderEcharts4r({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
     
@@ -173,25 +177,23 @@ server <- function(input, output, session) {
       sapply(w$topics, function(t) t$display_name %||% NA_character_)
     }))
     topics <- na.omit(topics_list)
-    
     if (length(topics) == 0) return(NULL)
     
     tbl <- sort(table(topics), decreasing = TRUE)
     top10 <- head(tbl, 10)
     
-    df_topic <- data.frame(
-      topic = names(top10),
-      n = as.numeric(top10),
-      stringsAsFactors = FALSE
-    )
+    df_topic <- data.frame(topic = names(top10), count = as.numeric(top10), stringsAsFactors = FALSE)
     
-    plot_ly(df_topic, labels = ~topic, values = ~n, type = "pie",
-            textinfo = "label+percent", hoverinfo = "label+value+percent") %>%
-      layout(title = "主要トピック構成 (Top 10)")
+    p <- e_charts(df_topic, topic)
+    p <- e_pie(p, count, radius = c("40%", "70%"))
+    p <- e_tooltip(p, trigger = "item")
+    p <- e_title(p, "主要トピック構成 (Top 10)")
+    p <- e_legend(p, show = FALSE)
+    p
   })
   
-  # 3. キーワード
-  output$wordcloud_plot <- renderPlotly({
+  # 3. キーワード (WordCloud)
+  output$wordcloud_plot <- renderEcharts4r({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
     
@@ -200,48 +202,29 @@ server <- function(input, output, session) {
       sapply(w$keywords, function(k) k$display_name %||% NA_character_)
     }))
     keywords <- na.omit(kw_list)
-    
     if (length(keywords) == 0) return(NULL)
     
     tbl <- sort(table(keywords), decreasing = TRUE)
     top25 <- head(tbl, 25)
     
-    if (length(top25) == 0) return(NULL)
-    
     df_kw <- data.frame(
-      word = names(top25),
-      n = as.numeric(top25),
+      word = names(top25), 
+      n = as.numeric(top25), 
       stringsAsFactors = FALSE
     )
     
-    num_words <- nrow(df_kw)
-    a <- 0
-    b <- 1.8
-    golden_angle <- 2.39996
-    
-    idx <- seq_len(num_words) - 1
-    theta <- idx * golden_angle
-    r <- a + b * sqrt(idx)
-    
-    df_kw$x <- r * cos(theta)
-    df_kw$y <- r * sin(theta)
-    
-    min_n <- min(df_kw$n)
-    max_n <- max(df_kw$n)
-    df_kw$size <- 11 + (df_kw$n - min_n) / (max_n - min_n + 1e-5) * 18
-    
-    plot_ly(df_kw, x = ~x, y = ~y, text = ~word, type = "scatter", mode = "text",
-            textfont = list(size = ~size, color = "#2b5c8f"),
-            hoverinfo = "text", hovertext = ~paste0(word, ": ", n, "回")) %>%
-      layout(
-        title = list(text = "出現キーワード (Top 25)", font = list(size = 14)),
-        margin = list(t = 40, b = 20, l = 20, r = 20),
-        xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, title = ""),
-        yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, title = "")
-      )
+    df_kw |> 
+      e_charts(word) |> 
+      e_cloud(word, n, sizeRange = c(12, 35)) |> 
+      e_tooltip(formatter = htmlwidgets::JS("
+        function(params){
+          return params.name + ': ' + params.value + '回';
+        }
+      ")) |> 
+      e_title("出現キーワード (Top 25)")
   })
   
-  # 4. ジャーナル Top 10 (Shiny標準の renderTable に変更)
+  # 4. ジャーナル Top 10 (Shiny renderTable)
   output$journal_table <- renderTable({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
@@ -252,20 +235,15 @@ server <- function(input, output, session) {
       list(name = src$display_name, id = src$id %||% "")
     })
     journals <- Filter(Negate(is.null), journals)
-    
     if (length(journals) == 0) return(NULL)
     
     names_vec <- sapply(journals, function(j) j$name)
     ids_vec <- sapply(journals, function(j) j$id)
     
     valid <- !is.na(names_vec) & names_vec != "Unknown / Preprints"
-    names_vec <- names_vec[valid]
-    ids_vec <- ids_vec[valid]
-    
-    if (length(names_vec) == 0) return(NULL)
-    
-    key <- paste(names_vec, ids_vec, sep = "___")
+    key <- paste(names_vec[valid], ids_vec[valid], sep = "___")
     tbl <- sort(table(key), decreasing = TRUE)
+    
     top10_keys <- head(names(tbl), 10)
     top10_counts <- head(as.numeric(tbl), 10)
     
@@ -279,15 +257,10 @@ server <- function(input, output, session) {
       j_names
     )
     
-    data.frame(
-      `ジャーナル名` = j_links,
-      `論文数` = as.integer(top10_counts),
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    )
-  }, sanitize.text.function = identity) # HTMLタグ（リンク）を有効化
+    data.frame(`ジャーナル名` = j_links, `論文数` = as.integer(top10_counts), check.names = FALSE, stringsAsFactors = FALSE)
+  }, sanitize.text.function = identity)
   
-  # 5. 共著者 Top 10 (Shiny標準の renderTable に変更)
+  # 5. 共著者 Top 10 (Shiny renderTable)
   output$coauthor_table <- renderTable({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
@@ -313,6 +286,7 @@ server <- function(input, output, session) {
     
     key <- paste(names_vec, urls_vec, sep = "___")
     tbl <- sort(table(key), decreasing = TRUE)
+    
     top10_keys <- head(names(tbl), 10)
     top10_counts <- head(as.numeric(tbl), 10)
     
@@ -326,13 +300,151 @@ server <- function(input, output, session) {
       co_names
     )
     
-    data.frame(
-      `共著者名` = co_links,
-      `共著論文数` = as.integer(top10_counts),
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    )
+    data.frame(`共著者名` = co_links, `共著論文数` = as.integer(top10_counts), check.names = FALSE, stringsAsFactors = FALSE)
   }, sanitize.text.function = identity)
+
+  # ネットワーク共有用の計算リアクティブ（ネットワークに含まれる論文情報を生成）
+  network_data <- reactive({
+    works <- filtered_works()
+    if (length(works) == 0) return(NULL)
+    
+    paper_ids <- unname(sapply(works, function(w) gsub(".*openalex\\.org/", "", w$id %||% "")))
+    paper_titles <- unname(sapply(works, function(w) w$title %||% "Untitled"))
+    paper_years <- unname(sapply(works, function(w) w$publication_year %||% "不明"))
+    paper_journals <- unname(sapply(works, function(w) {
+      src <- w$primary_location$source
+      if (!is.null(src) && !is.null(src$display_name)) src$display_name else "不明 / プレプリント"
+    }))
+    total_citations <- unname(sapply(works, function(w) w$cited_by_count %||% 0))
+    
+    edges_list <- lapply(works, function(w) {
+      source_id <- gsub(".*openalex\\.org/", "", w$id %||% "")
+      referenced_ids <- sapply(w$referenced_works %||% list(), function(ref) gsub(".*openalex\\.org/", "", ref))
+      valid_refs <- intersect(referenced_ids, paper_ids)
+      if (length(valid_refs) == 0) return(NULL)
+      data.frame(source = source_id, target = valid_refs, stringsAsFactors = FALSE)
+    })
+    
+    edges <- do.call(rbind, Filter(Negate(is.null), edges_list))
+    if (is.null(edges) || nrow(edges) == 0) return(NULL)
+    
+    self_cited_tbl <- table(edges$target)
+    self_cited_counts <- unname(sapply(paper_ids, function(id) {
+      if (id %in% names(self_cited_tbl)) as.numeric(self_cited_tbl[id]) else 0
+    }))
+    
+    list(
+      works = works,
+      paper_ids = paper_ids,
+      paper_titles = paper_titles,
+      paper_years = paper_years,
+      paper_journals = paper_journals,
+      total_citations = total_citations,
+      self_cited_counts = self_cited_counts,
+      edges = edges
+    )
+  })
+
+  # 右側UI: ネットワーク内論文セレクターの生成
+  output$network_paper_selector <- renderUI({
+    net <- network_data()
+    if (is.null(net)) return(p("引用関係のある論文はありません。"))
+    
+    # 自著内被引用数が多い順にソートして選択肢を構築
+    ord <- order(net$self_cited_counts, decreasing = TRUE)
+    
+    choices <- net$paper_ids[ord]
+    names(choices) <- sprintf("[%s年] %s (自著被引用:%d回)", 
+                              net$paper_years[ord], 
+                              net$paper_titles[ord], 
+                              net$self_cited_counts[ord])
+    
+    # 先頭に「選択なし」を追加
+    choices <- c("選択解除" = "none", choices)
+    
+    radioButtons("selected_net_paper", label = NULL, choices = choices, selected = "none")
+  })
+
+  # 6. 論文間の引用ネットワーク (選択された論文をオレンジ色で強調表示)
+  output$paper_network_plot <- renderEcharts4r({
+    net <- network_data()
+    if (is.null(net)) {
+      return(
+        e_charts() |> 
+          e_title("自著論文間の引用ネットワーク (自己引用関係なし)", "※取得データ内に論文同士の引用関係が見つかりませんでした")
+      )
+    }
+    
+    selected_id <- input$selected_net_paper %||% "none"
+    
+    min_sc <- min(net$self_cited_counts)
+    max_sc <- max(net$self_cited_counts)
+    node_sizes <- 15 + (net$self_cited_counts - min_sc) / (max_sc - min_sc + 1e-5) * 30
+    
+    # ノードリスト構築 (選択した論文の色を変更)
+    nodes_list <- lapply(seq_along(net$paper_ids), function(i) {
+      is_selected <- (net$paper_ids[i] == selected_id)
+      
+      # 通常時: 薄い水色 / 選択時: 鮮やかなオレンジ色
+      fill_color <- if (is_selected) "#ff7f0e" else "rgba(144, 202, 249, 0.75)"
+      border_color <- if (is_selected) "#d62728" else "#2b5c8f"
+      border_w <- if (is_selected) 3.0 else 1.5
+      
+      list(
+        name = as.character(net$paper_ids[i]),
+        value = as.numeric(net$self_cited_counts[i]),
+        total_cites = as.numeric(net$total_citations[i]),
+        symbolSize = round(as.numeric(node_sizes[i])) + (if (is_selected) 6 else 0), # 選択時は若干拡大
+        title = as.character(net$paper_titles[i]),
+        year = as.character(net$paper_years[i]),
+        journal = as.character(net$paper_journals[i]),
+        itemStyle = list(
+          color = fill_color,
+          borderColor = border_color,
+          borderWidth = border_w
+        )
+      )
+    })
+    
+    links_list <- lapply(seq_len(nrow(net$edges)), function(i) {
+      list(
+        source = as.character(net$edges$source[i]),
+        target = as.character(net$edges$target[i])
+      )
+    })
+    
+    p <- e_charts() |> 
+      e_graph(
+        layout = "force", 
+        roam = TRUE, 
+        draggable = TRUE, 
+        focusNodeAdjacency = TRUE,
+        edgeSymbol = c("none", "arrow"),
+        edgeSymbolSize = c(0, 8),
+        lineStyle = list(color = "#aaaaaa", opacity = 0.6, width = 1)
+      )
+    
+    p$x$opts$series[[1]]$data <- unname(nodes_list)
+    p$x$opts$series[[1]]$links <- unname(links_list)
+    
+    p |> 
+      e_tooltip(formatter = htmlwidgets::JS("
+        function(params){
+          if(params.dataType === 'node'){
+            return '<b>' + params.data.title + '</b><br/>' +
+                   '<b>年:</b> ' + params.data.year + '<br/>' +
+                   '<b>ジャーナル:</b> ' + params.data.journal + '<br/>' +
+                   '<b>自著からの被引用数:</b> ' + params.value + '回<br/>' +
+                   '<span style=\"color:#777; font-size:0.9em;\">(総被引用数: ' + params.data.total_cites + '回)</span>';
+          } else if(params.dataType === 'edge'){
+            return '引用関係 (引用元 → 引用先)';
+          }
+        }
+      ")) |> 
+      e_labels(show = FALSE) |> 
+      e_title("自著論文間の引用ネットワーク (サイズ: 自身の他論文からの被引用数)")
+  })
+
 }
 
 shinyApp(ui = ui, server = server)
