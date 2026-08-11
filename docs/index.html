@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenAlex Author Dashboard</title>
+    <title>Shiny App</title>
     <script
       src="./shinylive/load-shinylive-sw.js"
       type="module"
@@ -18,73 +18,11 @@
     </script>
     <link rel="stylesheet" href="./shinylive/style-resets.css" />
     <link rel="stylesheet" href="./shinylive/shinylive.css" />
-
-    <!-- 初期ローディング用のスタイルを追加 -->
-    <style>
-      #app-loader {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        background-color: #f8f9fa;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        z-index: 9999;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #333;
-      }
-      .spinner {
-        width: 50px;
-        height: 50px;
-        border: 5px solid #e9ecef;
-        border-top: 5px solid #2b5c8f;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-        margin-bottom: 20px;
-      }
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-    </style>
+    
   </head>
   <body>
     
-    <!-- 1. 初期ローディング画面 (表示用) -->
-    <div id="app-loader">
-      <div class="spinner"></div>
-      <h3 style="margin: 0 0 10px 0; color: #2b5c8f;">R環境 (webR) を起動中...</h3>
-      <p style="margin: 0; color: #666; font-size: 0.9em;">
-        ブラウザ内でRとパッケージを準備しています。<br>
-        初回読み込みには <strong>15〜30秒</strong> ほどかかります。そのままお待ちください。
-      </p>
-    </div>
-
-    <!-- 2. Shinyアプリのルート要素 -->
     <div style="height: 100vh; width: 100vw" id="root"></div>
-
-    <!-- 3. アプリ読み込み完了時にローディング画面を消すスクリプト -->
-    <script>
-      // root要素の中にShinyのUIが生成されたかを監視し、生成されたらローディング画面を隠す
-      const observer = new MutationObserver((mutations, obs) => {
-        const root = document.getElementById('root');
-        if (root && root.children.length > 0) {
-          const loader = document.getElementById('app-loader');
-          if (loader) {
-            loader.style.display = 'none';
-          }
-          obs.disconnect(); // 監視終了
-        }
-      });
-
-      observer.observe(document.getElementById('root'), {
-        childList: true,
-        subtree: true
-      });
-    </script>
-
+    
   </body>
 </html>
