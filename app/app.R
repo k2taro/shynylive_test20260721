@@ -3,6 +3,7 @@ library(jsonlite)
 library(dplyr)
 library(purrr)
 library(plotly)
+library(DT)
 
 # h-index 計算関数
 calc_h_index <- function(citations) {
@@ -13,6 +14,25 @@ calc_h_index <- function(citations) {
 }
 
 ui <- fluidPage(
+tags$head(
+    tags$style(HTML("
+      /* データ計算中の要素を半透明にし、メッセージを表示 */
+      .shiny-output-waiting-base {
+        opacity: 0.3 !important;
+      }
+      /* カスタムローディングスピナーのCSS */
+      .loading-notice {
+        background-color: #e8f4f8;
+        border-left: 4px solid #2b5c8f;
+        padding: 10px 15px;
+        margin-bottom: 15px;
+        border-radius: 4px;
+        font-size: 0.9em;
+        color: #2b5c8f;
+      }
+    "))
+  ),
+
   titlePanel("OpenAlex Author Dashboard (Shinylive Ready)"),
   
   sidebarLayout(
@@ -39,8 +59,8 @@ ui <- fluidPage(
       hr(),
       # 上段: 年推移 (幅7) & トピック (幅5)
       fluidRow(
-        column(7, plotlyOutput("time_series_plot", height = "450px")),
-        column(5, plotlyOutput("coauthor_bar_plot", height = "450px"))
+        column(8, plotlyOutput("time_series_plot", height = "450px")),
+        column(4, DTOutput("coauthor_table", height = "450px"))
         #column(5, plotlyOutput("topic_pie_plot", height = "350px"))
       ),
       br(),
@@ -48,7 +68,7 @@ ui <- fluidPage(
       fluidRow(
         column(4, plotlyOutput("wordcloud_plot", height = "450px")),
         column(4, plotlyOutput("topic_pie_plot", height = "450px")),
-        column(4, plotlyOutput("journal_bar_plot", height = "450px"))
+        column(4, DTOutput("journal_table", height = "450px"))
       )
     )
   )
@@ -170,7 +190,7 @@ server <- function(input, output, session) {
       layout(title = "主要トピック構成 (Top 10)")
   })
   
-  # 3. キーワード (Plotlyで再現するワードクラウド風散布図)
+ # 3. キーワード (中心集中的なワードクラウド風散布図)
   output$wordcloud_plot <- renderPlotly({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
@@ -185,83 +205,148 @@ server <- function(input, output, session) {
     
     df_kw <- tibble(word = keywords) %>%
       count(word, sort = TRUE) %>%
-      slice_head(n = 30)
+      slice_head(n = 25)
     
     if (nrow(df_kw) == 0) return(NULL)
     
-    # 疑似ワードクラウド用のランダム座標割り当て
-    set.seed(123)
+    # 螺旋アルゴリズムで高頻度ワードを中心に配置
+    num_words <- nrow(df_kw)
+    # アルキメデスの螺旋のパラメータ (r = a + b * theta)
+    a <- 0
+    b <- 1.8
+    # 黄金角 (約137.5度 = 2.3999 rad) で均等に分散
+    golden_angle <- 2.39996
+    
     df_kw <- df_kw %>%
       mutate(
-        x = runif(n(), 1, 10),
-        y = runif(n(), 1, 10),
-        size = 12 + (n - min(n)) / (max(n) - min(n) + 1e-5) * 24
+        idx = row_number() - 1, # 1位(0)を中心に
+        theta = idx * golden_angle,
+        r = a + b * sqrt(idx),   # 中心付近を密にするためsqrtを使用
+        x = r * cos(theta),
+        y = r * sin(theta),
+        # フォントサイズの計算 (Top 1~25に応じたメリハリ)
+        size = 11 + (n - min(n)) / (max(n) - min(n) + 1e-5) * 18
       )
     
     plot_ly(df_kw, x = ~x, y = ~y, text = ~word, type = "scatter", mode = "text",
             textfont = list(size = ~size, color = "#2b5c8f"),
             hoverinfo = "text", hovertext = ~paste0(word, ": ", n, "回")) %>%
       layout(
-        title = "出現キーワード (Top 30)",
-        xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, title = ""),
-        yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, title = "")
+        title = list(text = "出現キーワード (Top 25)", font = list(size = 14)),
+        margin = list(t = 40, b = 20, l = 20, r = 20),
+        xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, title = "", zerolinecolor = 'transparent'),
+        yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, title = "", zerolinecolor = 'transparent')
       )
   })
   
-  # 4. ジャーナル Top 10
-  output$journal_bar_plot <- renderPlotly({
+  # 4. ジャーナル Top 10 (DT表 + 論文数カラム + 降順ソート + OpenAlexリンク)
+  output$journal_table <- renderDT({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
     
-    journals <- map_chr(works, function(w) {
-      w$primary_location$source$display_name %||% "Unknown / Preprints"
-    })
+    # 掲載誌の表示名とOpenAlex IDを取得
+    journal_data <- map(works, function(w) {
+      src <- w$primary_location$source
+      if (is.null(src) || is.null(src$display_name)) return(NULL)
+      
+      list(
+        name = src$display_name,
+        id = src$id %||% NA_character_
+      )
+    }) %>%
+      compact()
     
-    df_j <- tibble(journal = journals) %>%
-      filter(journal != "Unknown / Preprints") %>%
-      count(journal, sort = TRUE) %>%
+    if (length(journal_data) == 0) return(NULL)
+    
+    # 集計・降順ソート・HTMLリンク生成
+    df_j <- tibble(
+      name = map_chr(journal_data, ~ .x$name),
+      id = map_chr(journal_data, ~ .x$id)
+    ) %>%
+      filter(!is.na(name), name != "Unknown / Preprints") %>%
+      group_by(name, id) %>%
+      summarise(`論文数` = n(), .groups = "drop") %>%
+      arrange(desc(`論文数`)) %>% # 論文数の降順（多い順）に並び替え
       slice_head(n = 10) %>%
-      arrange(n)
+      mutate(
+        `ジャーナル名` = ifelse(
+          !is.na(id) & id != "",
+          sprintf('<a href="%s" target="_blank" style="text-decoration: none; color: #2b5c8f; font-weight: bold;">%s 🔗</a>', id, name),
+          name
+        )
+      ) %>%
+      select(`ジャーナル名`, `論文数`) # カラム順序の指定
     
-    if (nrow(df_j) == 0) return(NULL)
-    
-    plot_ly(df_j, x = ~n, y = ~factor(journal, levels = journal), type = "bar",
-            orientation = "h", marker = list(color = "#59a14f")) %>%
-      layout(title = "掲載ジャーナル Top 10",
-             xaxis = list(title = "論文数"),
-             yaxis = list(title = ""))
+    # DTの描画設定
+    datatable(
+      df_j,
+      escape = FALSE, # HTMLリンクを有効化
+      rownames = FALSE,
+      options = list(
+        dom = 't',          # 余計なUI（検索窓やページネーション）を非表示
+        pageLength = 10,
+        ordering = FALSE,   # 自動並び替えをオフにして抽出時の降順を保持
+        columnDefs = list(
+          list(className = 'dt-center', targets = 1) # 論文数（1列目）を中央揃え
+        )
+      )
+    )
   })
   
-  # 5. 共著者 Top 10
-  output$coauthor_bar_plot <- renderPlotly({
+ # 5. 共著者 Top 10 (DT表 + 論文数カラム + 降順ソート + OpenAlexリンク)
+  output$coauthor_table <- renderDT({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
     
-    current_author_id <- gsub(".*authors/", "", input$author_id)
+    clean_id <- gsub(".*openalex\\.org/|.*authors/", "", input$author_id)
     
-    coauthors <- map(works, ~ .x$authorships) %>%
+    # 共著者の名前とOpenAlex IDを取得
+    coauthor_data <- map(works, ~ .x$authorships) %>%
       compact() %>%
       flatten() %>%
       map(function(a) {
-        id <- gsub(".*authors/", "", a$author$id %||% "")
+        id_raw <- a$author$id %||% ""
+        id <- gsub(".*authors/", "", id_raw)
         name <- a$author$display_name %||% ""
-        list(id = id, name = name)
+        
+        list(id_raw = id_raw, id = id, name = name)
       }) %>%
-      discard(~ .x$id == current_author_id || .x$name == "") %>%
-      map_chr(~ .x$name)
+      discard(~ .x$id == clean_id || .x$name == "")
     
-    if (length(coauthors) == 0) return(NULL)
+    if (length(coauthor_data) == 0) return(NULL)
     
-    df_co <- tibble(author = coauthors) %>%
-      count(author, sort = TRUE) %>%
+    # 集計・降順ソート・HTMLリンク生成
+    df_co <- tibble(
+      name = map_chr(coauthor_data, ~ .x$name),
+      url = map_chr(coauthor_data, ~ .x$id_raw)
+    ) %>%
+      group_by(name, url) %>%
+      summarise(`共著論文数` = n(), .groups = "drop") %>%
+      arrange(desc(`共著論文数`)) %>% # 降順に並び替え
       slice_head(n = 10) %>%
-      arrange(n)
+      mutate(
+        `共著者名` = ifelse(
+          !is.na(url) & url != "",
+          sprintf('<a href="%s" target="_blank" style="text-decoration: none; color: #2b5c8f; font-weight: bold;">%s 🔗</a>', url, name),
+          name
+        )
+      ) %>%
+      select(`共著者名`, `共著論文数`) # カラム順序の指定
     
-    plot_ly(df_co, x = ~n, y = ~factor(author, levels = author), type = "bar",
-            orientation = "h", marker = list(color = "#f28e2b")) %>%
-      layout(title = "共著者 Top 10",
-             xaxis = list(title = "共著論文数"),
-             yaxis = list(title = ""))
+    # DTの描画設定
+    datatable(
+      df_co,
+      escape = FALSE, # HTMLリンクを有効化
+      rownames = FALSE,
+      options = list(
+        dom = 't',          # 余計なUI（検索窓やページネーション）を非表示
+        pageLength = 10,
+        ordering = FALSE,   # 抽出時の降順ソートを保持
+        columnDefs = list(
+          list(className = 'dt-center', targets = 1) # 共著論文数（1列目）を中央揃え
+        )
+      )
+    )
   })
 }
 
