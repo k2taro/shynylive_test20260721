@@ -13,6 +13,15 @@ calc_h_index <- function(citations) {
 # ヌル合体演算子 (base R)
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+# カード型コンテナヘッダー用ヘルパー関数
+card_header <- function(title, help_id) {
+  div(
+    style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 2px solid #e9ecef; padding-bottom: 5px;",
+    h4(title, style = "margin: 0; font-weight: bold; color: #2b5c8f;"),
+    actionLink(help_id, label = " 💡解説", icon = icon("info-circle"), style = "font-size: 0.85em; color: #6c757d;")
+  )
+}
+
 ui <- fluidPage(
   tags$head(
     tags$style(HTML("
@@ -27,6 +36,8 @@ ui <- fluidPage(
       /* ネットワーク用ラジオボタン一覧の高さ固定・スクロール設定 */
       .network-paper-list { max-height: 440px; overflow-y: auto; padding: 10px; border: 1px solid #dee2e6; border-radius: 4px; background-color: #fff; }
       .network-paper-list .radio { margin-top: 5px; margin-bottom: 8px; font-size: 0.85em; }
+      /* カードコンテナスタイリング */
+      .dashboard-card { background: #ffffff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     "))
   ),
 
@@ -45,32 +56,111 @@ ui <- fluidPage(
     
     mainPanel(
       width = 10,
-      fluidRow(
-        column(4, wellPanel(style = "text-align: center; padding: 10px;", h4("論文数"), h2(textOutput("total_papers")))),
-        column(4, wellPanel(style = "text-align: center; padding: 10px;", h4("総被引用数"), h2(textOutput("total_citations")))),
-        column(4, wellPanel(style = "text-align: center; padding: 10px;", h4("h-index"), h2(textOutput("h_index"))))
-      ),
-      hr(),
-      # 上段: 年推移 (幅8) & 共著者Top10 (幅4)
-      fluidRow(
-        column(8, echarts4rOutput("time_series_plot", height = "450px")),
-        column(4, div(class = "custom-table", tableOutput("coauthor_table")))
-      ),
-      br(),
-      # 中段: キーワード (幅4) & トピック (幅4) & ジャーナルTop10 (幅4)
-      fluidRow(
-        column(4, echarts4rOutput("wordcloud_plot", height = "450px")),
-        column(4, echarts4rOutput("topic_pie_plot", height = "450px")),
-        column(4, div(class = "custom-table", tableOutput("journal_table")))
-      ),
-      br(),
-      # 下段（3段目）: 左側2/3(幅8)にネットワーク、右側1/3(幅4)に論文一覧
-      fluidRow(
-        column(8, echarts4rOutput("paper_network_plot", height = "500px")),
-        column(4, 
-          h4("ネットワーク論文一覧", style = "margin-top: 0;"),
-          helpText("選択した論文がネットワーク上で強調（オレンジ色）されます。"),
-          div(class = "network-paper-list", uiOutput("network_paper_selector"))
+      tabsetPanel(
+        id = "main_tabs",
+        tabPanel(
+          title = "📊 ダッシュボード",
+          br(),
+          # サマリー指標
+          fluidRow(
+            column(4, wellPanel(style = "text-align: center; padding: 10px;", h4("論文数"), h2(textOutput("total_papers")))),
+            column(4, wellPanel(style = "text-align: center; padding: 10px;", h4("総被引用数"), h2(textOutput("total_citations")))),
+            column(4, wellPanel(style = "text-align: center; padding: 10px;", h4("h-index"), h2(textOutput("h_index"))))
+          ),
+          hr(),
+          # 上段: 年推移 (幅8) & 共著者Top10 (幅4)
+          fluidRow(
+            column(8, 
+              div(class = "dashboard-card",
+                card_header("年別 研究業績推移（論文数・被引用数）", "help_time_series"),
+                echarts4rOutput("time_series_plot", height = "400px")
+              )
+            ),
+            column(4, 
+              div(class = "dashboard-card",
+                card_header("主要な共著者 Top 10", "help_coauthors"),
+                div(class = "custom-table", style = "height: 400px; overflow-y: auto;", tableOutput("coauthor_table"))
+              )
+            )
+          ),
+          # 中段: キーワード (幅4) & トピック (幅4) & ジャーナルTop10 (幅4)
+          fluidRow(
+            column(4, 
+              div(class = "dashboard-card",
+                card_header("研究キーワード (Top 25)", "help_keywords"),
+                echarts4rOutput("wordcloud_plot", height = "400px")
+              )
+            ),
+            column(4, 
+              div(class = "dashboard-card",
+                card_header("主要研究トピック構成 (Top 10)", "help_topics"),
+                echarts4rOutput("topic_pie_plot", height = "400px")
+              )
+            ),
+            column(4, 
+              div(class = "dashboard-card",
+                card_header("主要掲載ジャーナル Top 10", "help_journals"),
+                div(class = "custom-table", style = "height: 400px; overflow-y: auto;", tableOutput("journal_table"))
+              )
+            )
+          ),
+          # 下段（3段目）: 左側2/3(幅8)にネットワーク、右側1/3(幅4)に論文一覧
+          fluidRow(
+            column(8, 
+              div(class = "dashboard-card",
+                card_header("自著論文間の引用ネットワーク", "help_network"),
+                echarts4rOutput("paper_network_plot", height = "450px")
+              )
+            ),
+            column(4, 
+              div(class = "dashboard-card",
+                card_header("ネットワーク掲載 論文一覧", "help_paper_list"),
+                helpText("選択した論文が左のネットワーク上でオレンジ色に強調されます。"),
+                div(class = "network-paper-list", uiOutput("network_paper_selector"))
+              )
+            )
+          )
+        ),
+        
+        # 2つ目のタブ：各分析の詳細解説
+        tabPanel(
+          title = "📖 各分析の詳細解説",
+          br(),
+          fluidRow(
+            column(10, offset = 1,
+              h3("OpenAlex 研究パフォーマンス分析の解説", style = "color: #2b5c8f; border-bottom: 2px solid #2b5c8f; padding-bottom: 8px;"),
+              
+              h4("1. 年別 研究業績推移（論文数・被引用数）"),
+              p("指定された著者が各年に発表した「論文数（青棒グラフ）」と、それらの論文が獲得した「被引用数（赤折れ線グラフ）」の年別推移を示します。研究活動の波や、特定の時期に発表された論文の影響力の高まりを把握できます。"),
+              hr(),
+              
+              h4("2. 主要な共著者 Top 10"),
+              p("該当著者が最も頻繁に共同執筆を行っている研究者 Top 10 の一覧です。共著回数の多い順に表示され、名前をクリックすると相手の OpenAlex 著者ページを開くことができます。"),
+              hr(),
+              
+              h4("3. 研究キーワード (Top 25)"),
+              p("著者の全論文のメタデータから抽出された頻出キーワード上位25件をワードクラウド形式で視覚化しています。文字が大きい単語ほど、著者の研究において中心的なテーマであることを示します。"),
+              hr(),
+              
+              h4("4. 主要研究トピック構成 (Top 10)"),
+              p("OpenAlexが自動分類している研究分野・トピック（Topics）の比率を Top 10 まで円グラフで表示します。著者がどの学術領域を中心に貢献しているか、あるいは複数の領域にまたがる学際的な研究を行っているかがわかります。"),
+              hr(),
+              
+              h4("5. 主要掲載ジャーナル Top 10"),
+              p("論文が多く掲載されている学術誌（ジャーナル）や国際会議の一覧です。クリックすることで各ジャーナルの詳細情報（OpenAlex）にアクセスできます。"),
+              hr(),
+              
+              h4("6. 自著論文間の引用ネットワーク"),
+              p("著者自身の発表論文同士の「引用・被引用関係（自己引用ネットワーク）」を可視化したネットワーク図です。"),
+              tags$ul(
+                tags$li("ノード（円）：個別の論文を表します。"),
+                tags$li("ノードの大きさ：自身の「他の論文から引用された回数（自著内被引用数）」に比例します。大きければ大きいほど、自身の研究におけるコア・基盤となった論文です。"),
+                tags$li("矢印（エッジ）：引用元から引用先（過去の自著論文）に向かって伸びます。"),
+                tags$li("右側リスト連動：右側の「ネットワーク掲載 論文一覧」から特定の論文を選択すると、該当ノードがオレンジ色に強調表示されます。")
+              ),
+              br()
+            )
+          )
         )
       )
     )
@@ -125,7 +215,25 @@ server <- function(input, output, session) {
   output$total_citations <- renderText({ sum(sapply(filtered_works(), function(w) w$cited_by_count %||% 0)) })
   output$h_index <- renderText({ calc_h_index(sapply(filtered_works(), function(w) w$cited_by_count %||% 0)) })
   
-  # 年推移グラフ (echarts4r / base R)
+  # --- モーダル解説ダイアログを表示する処理 ---
+  show_help <- function(title, text) {
+    showModal(modalDialog(
+      title = title,
+      p(text),
+      easyClose = TRUE,
+      footer = modalButton("閉じる")
+    ))
+  }
+  
+  observeEvent(input$help_time_series, show_help("年別 研究業績推移", "年ごとの論文執筆数（棒グラフ）と、被引用数の推移（折れ線グラフ）を表示します。過去から現在までの研究インパクトの変化を確認できます。"))
+  observeEvent(input$help_coauthors, show_help("主要な共著者 Top 10", "この著者と共同で執筆した回数が最も多い共著者上位10名を表示します。名前をクリックするとOpenAlexの著者ページを開きます。"))
+  observeEvent(input$help_keywords, show_help("研究キーワード (Top 25)", "論文メタデータから抽出された主要キーワード上位25件です。大きく表示されている単語ほど多用されています。"))
+  observeEvent(input$help_topics, show_help("主要研究トピック構成 (Top 10)", "OpenAlexが自動分類した研究領域・トピックの構成比率Top10です。主要な研究ドメインがわかります。"))
+  observeEvent(input$help_journals, show_help("主要掲載ジャーナル Top 10", "論文が多く掲載されているジャーナルや会議体の上位10件です。"))
+  observeEvent(input$help_network, show_help("自著論文間の引用ネットワーク", "自身の過去の論文をどの程度参照・発展させているか（自著内引用関係）を可視化します。円の大きさは自著論文からの引用回数を示します。"))
+  observeEvent(input$help_paper_list, show_help("ネットワーク掲載 論文一覧", "ネットワークに含まれる論文の一覧です。論文を選択すると、ネットワーク上で該当ノードがオレンジ色に強調表示されます。"))
+
+  # 年推移グラフ (echarts4r)
   output$time_series_plot <- renderEcharts4r({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
@@ -155,14 +263,8 @@ server <- function(input, output, session) {
     p <- e_y_axis(p, name = "論文数", index = 0)
     p <- e_y_axis(p, name = "被引用数", index = 1)
     
-    p <- e_x_axis(p, 
-                  min = min_year, 
-                  max = max_year, 
-                  interval = 1, 
-                  axisLabel = list(formatter = "{value}"))
-                  
+    p <- e_x_axis(p, min = min_year, max = max_year, interval = 1, axisLabel = list(formatter = "{value}"))
     p <- e_tooltip(p, trigger = "axis")
-    p <- e_title(p, "年別 論文数と被引用数の推移")
     p <- e_legend(p, right = 10)
     p
   })
@@ -187,7 +289,6 @@ server <- function(input, output, session) {
     p <- e_charts(df_topic, topic)
     p <- e_pie(p, count, radius = c("40%", "70%"))
     p <- e_tooltip(p, trigger = "item")
-    p <- e_title(p, "主要トピック構成 (Top 10)")
     p <- e_legend(p, show = FALSE)
     p
   })
@@ -207,11 +308,7 @@ server <- function(input, output, session) {
     tbl <- sort(table(keywords), decreasing = TRUE)
     top25 <- head(tbl, 25)
     
-    df_kw <- data.frame(
-      word = names(top25), 
-      n = as.numeric(top25), 
-      stringsAsFactors = FALSE
-    )
+    df_kw <- data.frame(word = names(top25), n = as.numeric(top25), stringsAsFactors = FALSE)
     
     df_kw |> 
       e_charts(word) |> 
@@ -220,8 +317,7 @@ server <- function(input, output, session) {
         function(params){
           return params.name + ': ' + params.value + '回';
         }
-      ")) |> 
-      e_title("出現キーワード (Top 25)")
+      "))
   })
   
   # 4. ジャーナル Top 10 (Shiny renderTable)
@@ -303,7 +399,7 @@ server <- function(input, output, session) {
     data.frame(`共著者名` = co_links, `共著論文数` = as.integer(top10_counts), check.names = FALSE, stringsAsFactors = FALSE)
   }, sanitize.text.function = identity)
 
-  # ネットワーク共有用の計算リアクティブ（ネットワークに含まれる論文情報を生成）
+  # ネットワーク共有用の計算リアクティブ
   network_data <- reactive({
     works <- filtered_works()
     if (length(works) == 0) return(NULL)
@@ -350,7 +446,6 @@ server <- function(input, output, session) {
     net <- network_data()
     if (is.null(net)) return(p("引用関係のある論文はありません。"))
     
-    # 自著内被引用数が多い順にソートして選択肢を構築
     ord <- order(net$self_cited_counts, decreasing = TRUE)
     
     choices <- net$paper_ids[ord]
@@ -359,9 +454,7 @@ server <- function(input, output, session) {
                               net$paper_titles[ord], 
                               net$self_cited_counts[ord])
     
-    # 先頭に「選択なし」を追加
     choices <- c("選択解除" = "none", choices)
-    
     radioButtons("selected_net_paper", label = NULL, choices = choices, selected = "none")
   })
 
@@ -371,7 +464,7 @@ server <- function(input, output, session) {
     if (is.null(net)) {
       return(
         e_charts() |> 
-          e_title("自著論文間の引用ネットワーク (自己引用関係なし)", "※取得データ内に論文同士の引用関係が見つかりませんでした")
+          e_title("※取得データ内に論文同士の引用関係が見つかりませんでした")
       )
     }
     
@@ -381,11 +474,9 @@ server <- function(input, output, session) {
     max_sc <- max(net$self_cited_counts)
     node_sizes <- 15 + (net$self_cited_counts - min_sc) / (max_sc - min_sc + 1e-5) * 30
     
-    # ノードリスト構築 (選択した論文の色を変更)
     nodes_list <- lapply(seq_along(net$paper_ids), function(i) {
       is_selected <- (net$paper_ids[i] == selected_id)
       
-      # 通常時: 薄い水色 / 選択時: 鮮やかなオレンジ色
       fill_color <- if (is_selected) "#ff7f0e" else "rgba(144, 202, 249, 0.75)"
       border_color <- if (is_selected) "#d62728" else "#2b5c8f"
       border_w <- if (is_selected) 3.0 else 1.5
@@ -394,7 +485,7 @@ server <- function(input, output, session) {
         name = as.character(net$paper_ids[i]),
         value = as.numeric(net$self_cited_counts[i]),
         total_cites = as.numeric(net$total_citations[i]),
-        symbolSize = round(as.numeric(node_sizes[i])) + (if (is_selected) 6 else 0), # 選択時は若干拡大
+        symbolSize = round(as.numeric(node_sizes[i])) + (if (is_selected) 6 else 0),
         title = as.character(net$paper_titles[i]),
         year = as.character(net$paper_years[i]),
         journal = as.character(net$paper_journals[i]),
@@ -441,8 +532,7 @@ server <- function(input, output, session) {
           }
         }
       ")) |> 
-      e_labels(show = FALSE) |> 
-      e_title("自著論文間の引用ネットワーク (サイズ: 自身の他論文からの被引用数)")
+      e_labels(show = FALSE)
   })
 
 }
