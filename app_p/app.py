@@ -318,7 +318,7 @@ def server(input, output, session):
         papers_y = [yearly_papers[yr] for yr in sorted_years]
         citations_y = [yearly_citations[yr] for yr in sorted_years]
         
-        bar = (Bar(init_opts=opts.InitOpts(width="100%", height="320px"))
+        bar = (Bar(init_opts=opts.InitOpts(width="100%", height="360px"))
                .add_xaxis(x_data)
                .add_yaxis("論文数", papers_y, yaxis_index=0, color="#4c78a8")
                .extend_axis(yaxis=opts.AxisOpts(name="被引用数", type_="value"))
@@ -350,7 +350,7 @@ def server(input, output, session):
         if not topic_counts: return None
         top10 = topic_counts.most_common(10)
         
-        pie = (Pie(init_opts=opts.InitOpts(width="100%", height="320px"))
+        pie = (Pie(init_opts=opts.InitOpts(width="100%", height="360px"))
                .add("", [list(item) for item in top10], radius=["40%", "70%"])
                .set_global_opts(legend_opts=opts.LegendOpts(is_show=False), tooltip_opts=opts.TooltipOpts(trigger="item")))
         return ui.HTML(pie.render_embed())
@@ -370,7 +370,7 @@ def server(input, output, session):
         if not kw_counts: return ui.p("キーワードがありません")
         top10 = kw_counts.most_common(10)
         
-        pie = (Pie(init_opts=opts.InitOpts(width="100%", height="320px"))
+        pie = (Pie(init_opts=opts.InitOpts(width="100%", height="360px"))
                .add("", [list(item) for item in top10], radius=["40%", "70%"])
                .set_global_opts(legend_opts=opts.LegendOpts(is_show=False), 
                    tooltip_opts=opts.TooltipOpts(trigger="item")
@@ -529,7 +529,7 @@ def server(input, output, session):
             
         links = [{"source": e["source"], "target": e["target"]} for e in net["edges"]]
         
-        g = (Graph(init_opts=opts.InitOpts(width="100%", height="320px"))
+        g = (Graph(init_opts=opts.InitOpts(width="100%", height="360px"))
              .add("", nodes, links, layout="force", repulsion=400, edge_symbol=["none", "arrow"], edge_symbol_size=8,
                   linestyle_opts=opts.LineStyleOpts(color="#aaaaaa", opacity=0.6, width=1))
              .set_global_opts(tooltip_opts=opts.TooltipOpts(trigger="item")))
