@@ -1,9 +1,8 @@
 import re
 import collections
 from shiny import App, ui, render, reactive
-import requests
 from pyecharts import options as opts
-from pyecharts.charts import Line, Bar, Pie, WordCloud, Graph
+from pyecharts.charts import Line, Bar, Pie, Graph
 
 # --- ヘルパー関数群 ---
 
@@ -24,7 +23,6 @@ def card_header(title: str, help_id: str):
     """カード型コンテナヘッダー用ヘルパー関数"""
     return ui.div(
         ui.h4(title, style="margin: 0; font-weight: bold; color: #2b5c8f;"),
-        # 修正: icon=ui.icon(...) を削除し、テキスト内の絵文字(💡)で代用
         ui.input_action_link(help_id, " 💡解説", style="font-size: 0.85em; color: #6c757d; text-decoration: none;"),
         style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 2px solid #e9ecef; padding-bottom: 5px;"
     )
@@ -33,6 +31,9 @@ def card_header(title: str, help_id: str):
 
 app_ui = ui.page_fluid(
     ui.head_content(
+        ui.tags.script(
+            src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"
+        ),
         ui.tags.style("""
             .shiny-output-waiting-base { opacity: 0.3 !important; }
             .loading-notice { background-color: #e8f4f8; border-left: 4px solid #2b5c8f; padding: 10px 15px; margin-bottom: 15px; border-radius: 4px; font-size: 0.9em; color: #2b5c8f; }
@@ -42,9 +43,33 @@ app_ui = ui.page_fluid(
             .network-paper-list { max-height: 440px; overflow-y: auto; padding: 10px; border: 1px solid #dee2e6; border-radius: 4px; background-color: #fff; }
             .dashboard-card { background: #ffffff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
             .control-panel { background: #fdfdfd; border-right: 1px solid #e0e0e0; padding: 15px; min-height: 100vh; }
+        """),
+        # ★ JavaScriptによるネイティブデータ取得ロジック
+        ui.tags.script("""
+            $(document).on('click', '#fetch_btn', async function() {
+                var authorId = $('#author_id').val().trim();
+                if (!authorId) return;
+                
+                // クリーンなIDの抽出
+                authorId = authorId.replace(/.*openalex\\.org\\/|.*authors\\//g, "");
+                var url = `https://api.openalex.org/works?filter=author.id:${authorId}&per-page=200&mailto=example@example.com`;
+                
+                try {
+                    let response = await fetch(url);
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    let data = await response.json();
+                    let results = data.results || [];
+                    
+                    // Python側の input.js_fetched_data にデータを送信
+                    Shiny.setInputValue('js_fetched_data', results, {priority: 'event'});
+                } catch (err) {
+                    console.error("JS Fetch Error:", err);
+                    Shiny.setInputValue('js_fetched_data', [], {priority: 'event'});
+                }
+            });
         """)
     ),
-    ui.panel_title("OpenAlex Author Dashboard (超軽量版 / Pandas・Numpy不使用)"),
+    ui.panel_title("OpenAlex Author Dashboard (JSフェッチ連携版)"),
     
     ui.row(
         # 左側：常時表示のコントロールパネル (幅2)
@@ -56,7 +81,7 @@ app_ui = ui.page_fluid(
                 ui.hr(),
                 ui.output_ui("year_filter_ui"),
                 ui.hr(),
-                ui.help_text("※ webR/Pyodide環境を想定し、OpenAlex APIから直接データ(最大200件)を取得します。"),
+                ui.help_text("※ ブラウザのJS機能(fetch)を用いてOpenAlex APIから直接データを取得します。"),
                 class_="control-panel"
             )
         ),
@@ -175,19 +200,13 @@ app_ui = ui.page_fluid(
 
 def server(input, output, session):
     
-    # APIからのデータ取得
-    @reactive.event(input.fetch_btn, ignore_none=False)
+    # ★ JSから送られてきたデータを受け取るリアクティブ関数（通常の同期 def）
+    @reactive.calc
     def raw_data():
-        if not input.author_id():
-            return None
-        clean_id = input.author_id().strip()
-        url = f"https://api.openalex.org/works?filter=author.id:{clean_id}&per-page=200&mailto=example@example.com"
-        
-        try:
-            res = requests.get(url).json()
-            return res.get("results", [])
-        except Exception:
-            return None
+        data = input.js_fetched_data()
+        if not data:
+            return []
+        return data
 
     # 年度スライダーのUI生成
     @output
@@ -204,7 +223,7 @@ def server(input, output, session):
         min_yr, max_yr = min(years), max(years)
         return ui.input_slider("year_range", "対象年の絞り込み:", min=min_yr, max=max_yr, value=[min_yr, max_yr], step=1, sep="")
 
-    # フィルタリング済みデータ
+    # フィルタリング済みデータ（通常の同期 def に変更）
     @reactive.calc
     def filtered_works():
         works = raw_data()
@@ -275,7 +294,7 @@ def server(input, output, session):
     @reactive.event(input.help_paper_list)
     def _(): show_help("ネットワーク掲載 論文一覧", "ネットワークに含まれる論文の一覧です。選択した論文がオレンジ色に強調されます。")
 
-    # --- グラフ描画（PyEcharts 統合、純粋Pythonロジック） ---
+    # --- グラフ描画（PyEcharts 統合） ---
 
     @output
     @render.ui
@@ -283,7 +302,6 @@ def server(input, output, session):
         works = filtered_works()
         if not works: return None
         
-        # 集計用辞書
         yearly_papers = collections.defaultdict(int)
         yearly_citations = collections.defaultdict(int)
         
@@ -300,7 +318,7 @@ def server(input, output, session):
         papers_y = [yearly_papers[yr] for yr in sorted_years]
         citations_y = [yearly_citations[yr] for yr in sorted_years]
         
-        bar = (Bar()
+        bar = (Bar(init_opts=opts.InitOpts(width="100%", height="320px"))
                .add_xaxis(x_data)
                .add_yaxis("論文数", papers_y, yaxis_index=0, color="#4c78a8")
                .extend_axis(yaxis=opts.AxisOpts(name="被引用数", type_="value"))
@@ -332,7 +350,7 @@ def server(input, output, session):
         if not topic_counts: return None
         top10 = topic_counts.most_common(10)
         
-        pie = (Pie()
+        pie = (Pie(init_opts=opts.InitOpts(width="100%", height="320px"))
                .add("", [list(item) for item in top10], radius=["40%", "70%"])
                .set_global_opts(legend_opts=opts.LegendOpts(is_show=False), tooltip_opts=opts.TooltipOpts(trigger="item")))
         return ui.HTML(pie.render_embed())
@@ -352,32 +370,12 @@ def server(input, output, session):
         if not kw_counts: return ui.p("キーワードがありません")
         top10 = kw_counts.most_common(10)
         
-        pie = (Pie()
+        pie = (Pie(init_opts=opts.InitOpts(width="100%", height="320px"))
                .add("", [list(item) for item in top10], radius=["40%", "70%"])
-               .set_global_opts(
-                   legend_opts=opts.LegendOpts(is_show=False), 
+               .set_global_opts(legend_opts=opts.LegendOpts(is_show=False), 
                    tooltip_opts=opts.TooltipOpts(trigger="item")
                ))
         return ui.HTML(pie.render_embed())
-        
-        # iframe内で完結する独立した完全なHTMLドキュメントを構築
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <script src="https://jsdelivr.net"></script>
-            <script src="https://jsdelivr.net"></script>
-            <style>body {{ margin: 0; padding: 0; background: transparent; }}</style>
-        </head>
-        <body>
-            {wc.render_embed()}
-        </body>
-        </html>
-        """
-        # HTML特殊文字をエスケープしてiframeのsrcdocにセット
-        escaped_html = html_content.replace('"', '&quot;')
-        return ui.HTML(f'<iframe srcdoc="{escaped_html}" style="width:100%; height:350px; border:none; overflow:hidden;" scrolling="no"></iframe>')
 
     # 4. ジャーナル Top 10 Table
     @output
@@ -395,7 +393,6 @@ def server(input, output, session):
         if not journal_counts: return None
         top10 = journal_counts.most_common(10)
         
-        # HTMLタグとして安全に組み立てる
         rows = []
         for name, count in top10:
             rows.append(ui.tags.tr(ui.tags.td(name), ui.tags.td(str(count), style="text-align: right;")))
@@ -412,7 +409,7 @@ def server(input, output, session):
         works = filtered_works()
         if not works: return None
         
-        clean_id = re.sub(r".*openalex\.org/|.*authors/", "", input.author_id())
+        clean_id = re.sub(r".*openalex\\.org/|.*authors/", "", input.author_id())
         coauthor_counts = collections.Counter()
         for w in works:
             for auth in w.get("authorships", []):
@@ -440,7 +437,7 @@ def server(input, output, session):
         works = filtered_works()
         if not works: return None
         
-        paper_ids = [re.sub(r".*openalex\.org/", "", w.get("id", "")) for w in works]
+        paper_ids = [re.sub(r".*openalex\\.org/", "", w.get("id", "")) for w in works]
         titles = [w.get("title", "Untitled") for w in works]
         years = [str(w.get("publication_year", "不明")) for w in works]
         total_citations = [w.get("cited_by_count", 0) for w in works]
@@ -448,15 +445,14 @@ def server(input, output, session):
         edges = []
         paper_ids_set = set(paper_ids)
         for w in works:
-            source_id = re.sub(r".*openalex\.org/", "", w.get("id", ""))
-            refs = [re.sub(r".*openalex\.org/", "", r) for r in w.get("referenced_works", [])]
+            source_id = re.sub(r".*openalex\\.org/", "", w.get("id", ""))
+            refs = [re.sub(r".*openalex\\.org/", "", r) for r in w.get("referenced_works", [])]
             valid_refs = set(refs).intersection(paper_ids_set)
             for r_id in valid_refs:
                 edges.append({"source": source_id, "target": r_id})
                 
         if not edges: return None
         
-        # 被引用カウントの計算
         target_counts = collections.Counter([e["target"] for e in edges])
         self_cited_counts = [target_counts[pid] for pid in paper_ids]
         
@@ -477,7 +473,6 @@ def server(input, output, session):
         if not net:
             return ui.p("引用関係のある論文はありません。")
             
-        # 構造データを作成してソート
         items = []
         for i in range(len(net["paper_ids"])):
             items.append({
@@ -516,7 +511,6 @@ def server(input, output, session):
             is_sel = (pid == selected_id)
             sc = net["self_cited_counts"][i]
             
-            # サイズ計算
             size = 15 + ((sc - min_sc) / (max_sc - min_sc + 1e-5)) * 30
             if is_sel: size += 6
             
@@ -535,7 +529,7 @@ def server(input, output, session):
             
         links = [{"source": e["source"], "target": e["target"]} for e in net["edges"]]
         
-        g = (Graph()
+        g = (Graph(init_opts=opts.InitOpts(width="100%", height="320px"))
              .add("", nodes, links, layout="force", repulsion=400, edge_symbol=["none", "arrow"], edge_symbol_size=8,
                   linestyle_opts=opts.LineStyleOpts(color="#aaaaaa", opacity=0.6, width=1))
              .set_global_opts(tooltip_opts=opts.TooltipOpts(trigger="item")))
