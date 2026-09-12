@@ -25,14 +25,16 @@ jobs:
       - name: Setup R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          packages: |
+          packages:
             any::shiny
             any::shinylive
+            any::jsonlite
+            any::echarts4r
             # 💡 他にCRANの外部パッケージ（ggplot2等）を使っている場合は、ここに「any::ggplot2」のように追記します
 
       - name: Build Shinylive export
-        run: |
-          Rscript -e 'shinylive::export("app", "docs")'
+        run:
+          Rscript -e 'shinylive::export("app_lite", "docs")'
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
